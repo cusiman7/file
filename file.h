@@ -6,6 +6,8 @@
 #include <unistd.h>
 #include <sys/stat.h>
 
+#include <string.h>
+
 #include <string>
 #include <string_view>
 #include <exception>
@@ -120,7 +122,7 @@ public:
         lines_iterator begin();
         eof_sentinel end();
 
-        file& file;
+        file& f_;
     };
 
     lines_range lines();
@@ -537,7 +539,7 @@ file::lines_range file::lines() {
 }
 
 lines_iterator file::lines_range::begin() {
-    return lines_iterator(file);
+    return lines_iterator(f_);
 }
 
 eof_sentinel file::lines_range::end() {
