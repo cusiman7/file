@@ -4,16 +4,20 @@
 #include <fcntl.h>
 #include <unistd.h>
 #include <sys/stat.h>
+
 #include <string>
 #include <string_view>
 #include <exception>
-#include <iostream>
+#include <vector>
 
-#define DBG(x) std::cout << #x ": " << (x) << "\n";
+//#include <iostream>
+//#define DBG(x) std::cout << #x ": " << (x) << "\n"
 
 namespace file {
 class raw;
-class text;
+class file;
+class lines_iterator;
+struct eof_sentinel {};
 
 enum class mode {
     read,
@@ -27,7 +31,7 @@ enum class seek_mode {
     end,
 };
 
-template <class T = text>
+template <class T = file>
 T open(const std::string& path, mode mode = mode::read) {
     return T(path, mode);
 }
@@ -67,65 +71,105 @@ private:
     int64_t block_size_;
 };
 
-class text : public raw {
+class file {
 public:
-    explicit text(int fd);
-    text(const std::string& path, mode mode);
-    ~text();
+    explicit file(int fd);
+    file(const std::string& path, mode mode);
+    ~file();
+    
+    bool can_read() const;
+    bool can_write() const;
 
+    // Reads count bytes into buffer. Returns the number of bytes read
+    size_t read(void* buffer, size_t count);
+    // Reads count bytes and returns then as a std::string. 
+    // If count is less than 0 reads all remaining bytes in file.
     std::string read(int64_t count = -1);
+    // Reads count bytes and returns them as a std::vector.
+    // If count is less than 0 reads all remaining bytes in file.
+    std::vector<uint8_t> read_bytes(int64_t count = -1);
+    // Reads bytes until a newline ('\n') is read or end of file is reached.
+    // line is filled in with all read bytes *except* the trailing newline, if any.
+    // Returns true if any bytes were read.
     bool read_line(std::string& line);
-    void write(std::string_view sv);
+    // Reads bytes until the provided vec is at capacity or end of file is reached.
+    // Returns the number of bytes read.
+    size_t read_into_capacity(std::vector<uint8_t>& vec);
+
+    // Writes count bytes to the file from buffer
+    // Returns the number of bytes written
+    size_t write(const void* buffer, size_t count);
+    // Writes the provided string_view sv to the file
+    // Returns the number of bytes written
+    size_t write(std::string_view sv);
+    // Flushes the internal buffer to the underlying file
     void flush();
 
-    class lines_iterator {
-    public:
-        explicit lines_iterator(text& f) : f_(f) {
-            eof_ = !f_.read_line(line_);
-        }
+    void close();
+    bool closed() const;
 
-        using value_type = const std::string;
-        using pointer = const std::string*;
-        using reference = const std::string&;
-        using difference_type = ptrdiff_t;
-        using iterator_category = std::input_iterator_tag;
+    int64_t seek(int64_t offset, seek_mode mode);
+    int64_t tell() const;
+    void sync() const;
 
-        bool operator==(bool eof) {
-            return eof_ == eof;
-        }
+    int64_t size() const;
+    int64_t block_size() const;
 
-        bool operator!=(bool eof) {
-            return eof_ != eof;
-        }
+    struct lines_range {
+        lines_iterator begin();
+        eof_sentinel end();
 
-        reference operator*() { return line_; }
-        
-        lines_iterator& operator++() { eof_ = !f_.read_line(line_); return *this; }
-        lines_iterator operator++(int) { 
-            auto old = *this; 
-            eof_ = !f_.read_line(line_);
-            return old;
-        }
-    
-    private:
-        text& f_;
-        std::string line_;
-        bool eof_ = false;
+        file& file;
     };
 
-    lines_iterator begin() {
-        return lines_iterator(*this);
+    lines_range lines();
+
+private:
+    raw file_;
+
+    char* buffer_ = nullptr;
+    size_t buf_cap_ = 0; // capacity of buffer
+    size_t buf_size_ = 0; // read size 
+    size_t buf_i_ = 0; // current "pointer" for reading/writing
+};
+
+class lines_iterator {
+public:
+    using value_type = const std::string;
+    using pointer = const std::string*;
+    using reference = const std::string&;
+    using difference_type = ptrdiff_t;
+    using iterator_category = std::input_iterator_tag;
+
+    explicit lines_iterator(file& f) : f_(f) {
+        eof_ = !f_.read_line(line_);
     }
 
-    bool end() {
-        return true;
+    bool operator==(eof_sentinel) {
+        return eof_;
+    }
+
+    bool operator!=(eof_sentinel) {
+        return !eof_;
+    }
+
+    reference operator*() { return line_; }
+    
+    lines_iterator& operator++() {
+        eof_ = !f_.read_line(line_);
+        return *this;
+    }
+
+    lines_iterator operator++(int) { 
+        auto old = *this; 
+        eof_ = !f_.read_line(line_);
+        return old;
     }
 
 private:
-    char* buffer_ = nullptr;
-    size_t buf_cap_ = 0;
-    size_t buf_size_ = 0; // only used for reading
-    size_t buf_i_ = 0;
+    file& f_;
+    std::string line_;
+    bool eof_ = false;
 };
 
 raw::raw(int fd) : fd_(fd) {
@@ -158,11 +202,11 @@ raw::~raw() {
 }
 
 bool raw::can_read() const {
-    return mode_ == mode::read;
+    return !closed() && mode_ == mode::read;
 }
 
 bool raw::can_write() const {
-    return mode_ == mode::write || mode_ == mode::append;
+    return !closed() && (mode_ == mode::write || mode_ == mode::append);
 }
 
 size_t raw::read(void* buffer, size_t count) const {
@@ -257,39 +301,83 @@ void raw::run_stat() {
     block_size_ = st.st_blksize;
 }
 
-text::text(int fd) : raw(fd) {}
+file::file(int fd) : file_(fd) {}
 
-text::text(const std::string& path, mode mode) : raw(path, mode) {
-    int64_t block_s = block_size();
+file::file(const std::string& path, mode mode) : file_(path, mode) {
+    int64_t block_s = file_.block_size();
     buf_cap_ = (block_s > 0) ? block_s : 4096;
     buffer_ = static_cast<char*>(malloc(buf_cap_));
 }
 
-text::~text() {
+file::~file() {
     if (can_write()) {
         flush();
     }
     free(buffer_);
 }
 
-std::string text::read(int64_t count) {
+bool file::can_read() const {
+    return file_.can_read();
+}
+
+bool file::can_write() const {
+    return file_.can_write();
+}
+
+size_t file::read(void* buffer, size_t count) {
+    if (!can_read()) {
+        throw std::runtime_error("Can't read from write-only file");
+    }
+
+    size_t read = 0;
+    while (true) {
+        size_t available = buf_size_ - buf_i_;
+        size_t copy_size = std::min(count - read, available);
+
+        memcpy(buffer, buffer_ + buf_i_, copy_size);
+        buf_i_ += copy_size;
+        read += copy_size;
+
+        if (read == count) {
+            return read;
+        }
+
+        buf_size_ = file_.read(buffer_, buf_cap_);
+        buf_i_ = 0;
+
+        if (buf_size_ == 0) {
+            return read;
+        }
+    }
+}
+
+std::string file::read(int64_t count) {
     if (count < 0) {
-        count = size() - tell();
+        size_t available = buf_size_ - buf_i_;
+        count = size() - tell() + available;
         if (count < 0) {
-            throw std::runtime_error("File offset beyond end of text");
+            throw std::runtime_error("File offset beyond end of file");
         }
     }
 
     std::string ret;
     ret.reserve(static_cast<size_t>(count));
 
-    size_t start = buf_i_;
-    buf_i_ = buf_size_;
+    size_t read = 0;
     while (true) {
-        ret.append(buffer_ + start, buf_i_ - start);
-        buf_size_ = raw::read(buffer_, buf_cap_);
-        buf_i_ = buf_size_;
-        start = 0;
+        size_t available = buf_size_ - buf_i_;
+        size_t copy_size = std::min(static_cast<size_t>(count) - read, available);
+        ret.append(buffer_ + buf_i_, copy_size);
+    
+        buf_i_ += copy_size;
+        read += copy_size;
+
+        if (read == count) {
+            return ret;
+        }
+
+        buf_size_ = file_.read(buffer_, buf_cap_);
+        buf_i_ = 0;
 
         if (buf_size_ == 0) {
             return ret;
@@ -297,14 +385,71 @@ std::string text::read(int64_t count) {
     }
 }
 
-bool text::read_line(std::string& line) {
+std::vector<uint8_t> file::read_bytes(int64_t count) {
+    if (count < 0) {
+        size_t available = buf_size_ - buf_i_;
+        count = size() - tell() + available;
+        if (count < 0) {
+            throw std::runtime_error("File offset beyond end of file");
+        }
+    }
+
+    std::vector<uint8_t> ret;
+    ret.reserve(static_cast<size_t>(count));
+
+    size_t read = 0;
+    while (true) {
+        size_t available = buf_size_ - buf_i_;
+        size_t copy_size = std::min(static_cast<size_t>(count) - read, available);
+        ret.insert(ret.end(), buffer_ + buf_i_, buffer_ + buf_i_ + copy_size);
+    
+        buf_i_ += copy_size;
+        read += copy_size;
+
+        if (read == count) {
+            return ret;
+        }
+
+        buf_size_ = file_.read(buffer_, buf_cap_);
+        buf_i_ = 0;
+
+        if (buf_size_ == 0) {
+            return ret;
+        }
+    }
+}
+
+size_t file::read_into_capacity(std::vector<uint8_t>& vec) {
+    size_t read = 0;
+    while (true) {
+        size_t available = buf_size_ - buf_i_;
+        size_t copy_size = std::min(vec.capacity() - vec.size(), available);
+
+        vec.insert(vec.end(), buffer_ + buf_i_, buffer_ + buf_i_ + copy_size);
+        buf_i_ += copy_size;
+        read += copy_size;
+
+        if (vec.capacity() == vec.size()) {
+            return read;
+        }
+
+        buf_size_ = file_.read(buffer_, buf_cap_);
+        buf_i_ = 0;
+
+        if (buf_size_ == 0) {
+            return read;
+        }
+    }
+}
+
+bool file::read_line(std::string& line) {
     size_t start = buf_i_;
     line.clear();
 
     while(true) {
         if (buf_i_ == buf_size_) {
             line.append(buffer_ + start, buf_i_ - start);
-            buf_size_ = raw::read(buffer_, buf_cap_);
+            buf_size_ = file_.read(buffer_, buf_cap_);
 
             buf_i_ = 0;
             start = 0;
@@ -326,25 +471,76 @@ bool text::read_line(std::string& line) {
     return true;
 }
 
-void text::write(std::string_view sv) {
-    auto it = sv.begin();
-    auto end = sv.end();
-    while(it != end) {
+size_t file::write(const void* buffer, size_t count) {
+    if (!can_write()) {
+        throw std::runtime_error("Can't write to read-only file");
+    }
+
+    size_t written = 0;
+    while (written != count) {
         size_t cap_remaining = buf_cap_ - buf_i_;
-        size_t count = (cap_remaining < end - it) ? cap_remaining : end - it;
-        memcpy(buffer_ + buf_i_, it, count); 
-        buf_i_ += count;
-        it += count;
+        size_t copy_size = std::min(count - written, cap_remaining);
+        memcpy(buffer_ + buf_i_, static_cast<const char*>(buffer) + written, copy_size);
+        buf_i_ += copy_size;
+        written += copy_size;
 
         if (buf_i_ == buf_cap_) {
             flush();
         }
     }
+    return written;
 }
 
-void text::flush() {
-    raw::write(buffer_, buf_i_);
+size_t file::write(std::string_view sv) {
+    return write(sv.data(), sv.size());
+}
+
+void file::flush() {
+    file_.write(buffer_, buf_i_);
     buf_i_ = 0; 
+}
+
+void file::close() {
+    file_.close();
+}
+
+bool file::closed() const {
+    return file_.closed();
+}
+
+int64_t file::seek(int64_t offset, seek_mode mode) {
+    int64_t ret = file_.seek(offset, mode);
+    buf_i_ = 0;
+    buf_size_ = 0;
+    return ret;
+}
+
+int64_t file::tell() const {
+    return file_.tell();
+}
+
+void file::sync() const {
+    file_.sync();
+}
+
+int64_t file::size() const {
+    return file_.size();
+}
+
+int64_t file::block_size() const {
+    return file_.block_size();
+}
+
+file::lines_range file::lines() {
+    return {*this};
+}
+
+lines_iterator file::lines_range::begin() {
+    return lines_iterator(file);
+}
+
+eof_sentinel file::lines_range::end() {
+    return {};
 }
 
 } // namespace file
