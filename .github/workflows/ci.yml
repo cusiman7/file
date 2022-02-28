@@ -18,6 +18,9 @@ jobs:
     - name: configure 
       run: cmake ..
       working-directory: ./build
-    - name: build & run tests
+    - name: build
+      run: make -j
+      working-directory: ./build
+    - name: run tests
       run: make test
       working-directory: ./build
