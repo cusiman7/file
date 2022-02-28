@@ -1,3 +1,4 @@
+// Copyright Rob Cusimano
 
 #pragma once
 
