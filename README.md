@@ -10,6 +10,8 @@ file:: is a simple C++ file read/write library. For when you just want to read a
 ## Read a File
 
 ```c++
+#include "file.h"
+
 file::file f = file::open("hello.txt");
 
 std::string contents = f.read();
@@ -18,7 +20,9 @@ std::string contents = f.read();
 ## Write a File
 
 ```c++
-file::file f = file::open("hello.txt", file::mode::write);
+#include "file.h"
+
+auto f = file::open("hello.txt", file::mode::write);
 
 f.write("hello file::\n");
 ```
@@ -26,9 +30,11 @@ f.write("hello file::\n");
 ## Read a File Line by Line
 
 ```c++
-file::file f = file::open("hello.txt");
+#include "file.h"
 
-for (auto& line : f.lines()) {
+auto f = file::open("hello.txt");
+
+for (const std::string& line : f.lines()) {
   ...
 }
 ```
@@ -36,7 +42,9 @@ for (auto& line : f.lines()) {
 ## Read a File as Bytes
 
 ```c++
-file::file f = file::open("hello.bin");
+#include "file.h"
+
+auto f = file::open("hello.bin");
 
 std::vector<uint8_t> = f.read_bytes();
 ```
