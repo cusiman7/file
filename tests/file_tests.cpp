@@ -1,6 +1,8 @@
 
 #include "catch.hpp"
 
+#include <fstream>
+#include <sstream>
 #include "../file.h"
 
 static const char* test_txt = 
@@ -10,7 +12,7 @@ end
 )";
 
 
-TEST_CASE("Read a file") {
+TEST_CASE("Read a file", "[unit]") {
 
     auto f = file::open("test.txt");
 
@@ -102,3 +104,48 @@ TEST_CASE("Read a file") {
         REQUIRE(f.read(2) == "is");
     }
 }
+
+TEST_CASE("Benchmark words", "[bench]") {
+    BENCHMARK("file wc") {
+        auto f = file::open("words");
+        uint64_t count = 0;
+        for (auto& line : f.lines()) {
+            count++;
+        }
+        return count;
+    };
+    
+    BENCHMARK("iostream wc") {
+        std::ifstream f("words"); 
+        uint64_t count = 0;
+        for (std::string line; std::getline(f, line);) {
+            count++;
+        }
+        return count;
+    };
+    
+    BENCHMARK("file read as string") {
+        auto f = file::open("words");
+        return f.read(); 
+    };
+
+    BENCHMARK("iostream read as string (stringstream)") {
+        std::ifstream t("words");
+        std::stringstream buffer;
+        buffer << t.rdbuf(); 
+        return buffer.str();
+    };
+
+    BENCHMARK("iostream read as string (low level)") {
+        std::ifstream t("words");
+        t.seekg(0, std::ios::end);
+        size_t size = t.tellg();
+        std::string buffer(size, ' ');
+        t.seekg(0);
+        t.read(&buffer[0], size);
+        return buffer;
+    };
+}
+
+
+
