@@ -20,3 +20,4 @@ jobs:
       working-directory: ./build
     - name: build & run tests
       run: ninja tests
+      working-directory: ./build
