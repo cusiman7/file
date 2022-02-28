@@ -463,7 +463,9 @@ bool file::read_line(std::string& line) {
         }
 
         if (buffer_[buf_i_] == '\n') {
-            line.append(buffer_ + start, buf_i_ - start);
+            size_t end = buf_i_ - start;
+            end -= (buf_i_ > 0 && buffer_[buf_i_ - 1] == '\r') ? 1 : 0;
+            line.append(buffer_ + start, end);
             buf_i_++;
             break;
         }

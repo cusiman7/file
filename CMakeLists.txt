@@ -18,6 +18,7 @@ target_compile_options(tests PUBLIC "$<$<CONFIG:RELEASE>:${RELEASE_OPTIONS}>")
 
 file(COPY 
     tests/test.txt
+    tests/test_crlf.txt
     tests/words
     DESTINATION ${CMAKE_CURRENT_BINARY_DIR})
 add_test(NAME tests COMMAND tests)

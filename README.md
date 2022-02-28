@@ -87,4 +87,5 @@ iostream read as string (low level)            100             1    81.3872 ms
 
 # TODO
 
-* Windows support (CRLF line endings)
+* More extensive testing
+* Code coverage
