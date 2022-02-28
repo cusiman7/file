@@ -100,6 +100,24 @@ TEST_CASE("Read a file", "[unit]") {
         REQUIRE(f.tell() == 5);
         REQUIRE(f.read(2) == "is");
     }
+
+    SECTION("Move construct") {
+        file::file f2(std::move(f));
+
+        REQUIRE(f.closed());
+        REQUIRE(!f2.closed());
+        REQUIRE_THROWS(f.read());
+        REQUIRE(!f2.read().empty());
+    }
+    
+    SECTION("Move assign") {
+        file::file f2 = std::move(f);
+
+        REQUIRE(f.closed());
+        REQUIRE(!f2.closed());
+        REQUIRE_THROWS(f.read());
+        REQUIRE(!f2.read().empty());
+    }
 }
 
 TEST_CASE("Read a file (CRLF)", "[unit]") {
@@ -193,6 +211,24 @@ TEST_CASE("Read a file (CRLF)", "[unit]") {
         REQUIRE(f.seek(5, file::seek_mode::set) == 5);
         REQUIRE(f.tell() == 5);
         REQUIRE(f.read(2) == "is");
+    }
+
+    SECTION("Move construct") {
+        file::file f2(std::move(f));
+
+        REQUIRE(f.closed());
+        REQUIRE(!f2.closed());
+        REQUIRE_THROWS(f.read());
+        REQUIRE(!f2.read().empty());
+    }
+    
+    SECTION("Move assign") {
+        file::file f2 = std::move(f);
+
+        REQUIRE(f.closed());
+        REQUIRE(!f2.closed());
+        REQUIRE_THROWS(f.read());
+        REQUIRE(!f2.read().empty());
     }
 }
 

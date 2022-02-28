@@ -41,12 +41,11 @@ T open(const std::string& path, mode mode = mode::read) {
 
 class raw {
 public:
-    explicit raw(int fd);
     raw(const std::string& path, mode mode);
     raw(const raw& other) = delete;
     raw& operator=(const raw& other) = delete;
-    raw(raw&& other) = default;
-    raw& operator=(raw&& other) = default;
+    raw(raw&& other);
+    raw& operator=(raw&& other);
     ~raw();
 
     bool can_read() const;
@@ -76,8 +75,11 @@ private:
 
 class file {
 public:
-    explicit file(int fd);
     file(const std::string& path, mode mode);
+    file(const raw& other) = delete;
+    file& operator=(const file& other) = delete;
+    file(file&& other);
+    file& operator=(file&& other);
     ~file();
     
     bool can_read() const;
@@ -108,7 +110,9 @@ public:
     // Flushes the internal buffer to the underlying file
     void flush();
 
+    // Flushes the internal buffer to the underlying file, if applicable and closes the file.
     void close();
+    // Returns true if the file is closed
     bool closed() const;
 
     int64_t seek(int64_t offset, seek_mode mode);
@@ -125,6 +129,7 @@ public:
         file& f_;
     };
 
+    // An input range over the lines of this file
     lines_range lines();
 
 private:
@@ -175,10 +180,6 @@ private:
     bool eof_ = false;
 };
 
-raw::raw(int fd) : fd_(fd) {
-    run_stat(); 
-}
-
 raw::raw(const std::string& path, mode mode) : mode_(mode) {
     int flags = 0;
     mode_t posix_mode = 0;
@@ -198,6 +199,26 @@ raw::raw(const std::string& path, mode mode) : mode_(mode) {
     
     fd_ = ::open(path.c_str(), flags, posix_mode);
     run_stat();
+}
+
+raw::raw(raw&& other) : 
+fd_(other.fd_),
+mode_(other.mode_),
+size_(other.size_),
+block_size_(other.block_size_)  {
+    other.fd_ = -1;
+}
+
+raw& raw::operator=(raw&& other) {
+    if (this != &other) {
+        this->close();
+        fd_ = other.fd_;
+        mode_ = other.mode_;
+        size_ = other.size_;
+        block_size_ = other.block_size_;
+        other.fd_ = -1;
+    }
+    return *this;
 }
 
 raw::~raw() {
@@ -237,7 +258,9 @@ size_t raw::write(const void* buffer, size_t count) const {
 }
 
 void raw::close() {
-    ::close(fd_);
+    if (fd_ >= 0) {
+        ::close(fd_);
+    }
     fd_ = -1; 
 }
 
@@ -304,18 +327,44 @@ void raw::run_stat() {
     block_size_ = st.st_blksize;
 }
 
-file::file(int fd) : file_(fd) {}
-
 file::file(const std::string& path, mode mode) : file_(path, mode) {
     int64_t block_s = file_.block_size();
     buf_cap_ = (block_s > 0) ? block_s : 4096;
     buffer_ = static_cast<char*>(malloc(buf_cap_));
 }
 
-file::~file() {
-    if (can_write()) {
-        flush();
+file::file(file&& other) : 
+file_(std::move(other.file_)),
+buffer_(other.buffer_),
+buf_cap_(other.buf_cap_),
+buf_i_(other.buf_i_)  {
+    other.buffer_ = nullptr;
+    other.buf_cap_ = 0;
+    other.buf_size_ = 0;
+    other.buf_i_ = 0;
+}
+
+file& file::operator=(file&& other) {
+    if (this != &other) {
+        this->close();
+        free(buffer_);
+
+        file_ = std::move(other.file_);
+        buffer_ = other.buffer_;
+        buf_cap_ = other.buf_cap_;
+        buf_size_ = other.buf_size_;
+        buf_i_ = other.buf_i_;
+
+        other.buffer_ = nullptr;
+        other.buf_cap_ = 0;
+        other.buf_size_ = 0;
+        other.buf_i_ = 0;
     }
+    return *this;
+}
+
+file::~file() {
+    close();
     free(buffer_);
 }
 
@@ -506,6 +555,9 @@ void file::flush() {
 }
 
 void file::close() {
+    if (can_write()) {
+        flush();
+    }
     file_.close();
 }
 
