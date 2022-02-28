@@ -375,7 +375,7 @@ std::string file::read(int64_t count) {
         buf_i_ += copy_size;
         read += copy_size;
 
-        if (read == count) {
+        if (read == static_cast<size_t>(count)) {
             return ret;
         }
 
@@ -409,7 +409,7 @@ std::vector<uint8_t> file::read_bytes(int64_t count) {
         buf_i_ += copy_size;
         read += copy_size;
 
-        if (read == count) {
+        if (read == static_cast<size_t>(count)) {
             return ret;
         }
 

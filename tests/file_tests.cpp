@@ -20,13 +20,13 @@ TEST_CASE("Read a file", "[unit]") {
         char buf[100];
         size_t size = f.read(buf, 100);
         REQUIRE(size == 34);
-        REQUIRE(size == f.size());
+        REQUIRE(size == static_cast<size_t>(f.size()));
     } 
 
     SECTION("Can read whole file as a string") {
         std::string s = f.read();
         REQUIRE(s.size() == 34);
-        REQUIRE(s.size() == f.size());    
+        REQUIRE(s.size() == static_cast<size_t>(f.size()));    
         REQUIRE(s == test_txt);
     }
 
@@ -54,6 +54,7 @@ TEST_CASE("Read a file", "[unit]") {
     SECTION("Can read lines as iterator") {
         size_t count = 0;
         for(auto& line : f.lines()) {
+            (void)line;
             count++; 
         }
         REQUIRE(count == 3);
@@ -110,6 +111,7 @@ TEST_CASE("Benchmark words", "[bench]") {
         auto f = file::open("words");
         uint64_t count = 0;
         for (auto& line : f.lines()) {
+            (void)line;
             count++;
         }
         return count;
@@ -119,6 +121,7 @@ TEST_CASE("Benchmark words", "[bench]") {
         std::ifstream f("words"); 
         uint64_t count = 0;
         for (std::string line; std::getline(f, line);) {
+            (void)line;
             count++;
         }
         return count;
