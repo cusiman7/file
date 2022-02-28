@@ -87,5 +87,6 @@ iostream read as string (low level)            100             1    81.3872 ms
 
 # TODO
 
+* Improved Windows support
 * More extensive testing
 * Code coverage

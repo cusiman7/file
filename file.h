@@ -2,10 +2,18 @@
 
 #pragma once
 
-#include <fcntl.h>
+#ifdef _WIN32
+#include <windows.h> // For FlushFileBuffers
+#include <io.h>
+#else
 #include <unistd.h>
+#endif
+
+#include <fcntl.h>
+#include <sys/types.h>
 #include <sys/stat.h>
 
+#include <stdio.h>
 #include <string.h>
 
 #include <string>
@@ -182,22 +190,45 @@ private:
 
 raw::raw(const std::string& path, mode mode) : mode_(mode) {
     int flags = 0;
-    mode_t posix_mode = 0;
+#ifdef _WIN32
+    int p_mode = 0;
+    switch (mode) {
+        case mode::read:
+            flags |= _O_RDONLY | _O_BINARY;
+            p_mode = _S_IREAD;
+            break;
+        case mode::write:
+            flags |= _O_WRONLY | _O_TRUNC | _O_CREAT | _O_BINARY;
+            p_mode = _S_IWRITE;
+            break;
+        case mode::append:
+            flags |= _O_WRONLY | _O_APPEND | _O_CREAT | _O_BINARY;
+            p_mode = _S_IWRITE;
+            break;
+    }
+    
+#pragma warning(push)
+#pragma warning(disable: 4996)
+    fd_ = ::_open(path.c_str(), flags, p_mode);
+#pragma warning(pop)
+#else
+    mode_t p_mode = 0;
     switch (mode) {
         case mode::read:
             flags |= O_RDONLY;
             break;
         case mode::write:
             flags |= O_WRONLY | O_TRUNC | O_CREAT;
-            posix_mode = S_IRUSR | S_IWUSR | S_IRGRP | S_IROTH;
+            p_mode = S_IRUSR | S_IWUSR | S_IRGRP | S_IROTH;
             break;
         case mode::append:
             flags |= O_WRONLY | O_APPEND | O_CREAT;
-            posix_mode = S_IRUSR | S_IWUSR | S_IRGRP | S_IROTH;
+            p_mode = S_IRUSR | S_IWUSR | S_IRGRP | S_IROTH;
             break;
     }
     
-    fd_ = ::open(path.c_str(), flags, posix_mode);
+    fd_ = ::open(path.c_str(), flags, p_mode);
+#endif
     run_stat();
 }
 
@@ -222,7 +253,7 @@ raw& raw::operator=(raw&& other) {
 }
 
 raw::~raw() {
-    ::close(fd_);
+    close();
 }
 
 bool raw::can_read() const {
@@ -234,24 +265,26 @@ bool raw::can_write() const {
 }
 
 size_t raw::read(void* buffer, size_t count) const {
+#ifdef _WIN32
+    int bytes_read = ::_read(fd_, buffer, static_cast<unsigned int>(count));
+#else
     ssize_t bytes_read = ::read(fd_, buffer, count);
+#endif
     if (bytes_read < 0) {
-        switch(errno) {
-            default:
-            throw std::runtime_error("Couldn't read file");
-        }
+        throw std::runtime_error("Couldn't read file");
     }
 
     return static_cast<size_t>(bytes_read);
 }
 
 size_t raw::write(const void* buffer, size_t count) const {
+#ifdef _WIN32
+    int bytes_written = ::_write(fd_, buffer, static_cast<unsigned int>(count));
+#else
     ssize_t bytes_written = ::write(fd_, buffer, count);
+#endif
     if (bytes_written < 0) {
-        switch(errno) {
-            default:
-            throw std::runtime_error("Couldn't write file");
-        }
+        throw std::runtime_error("Couldn't write file");
     }
 
     return static_cast<size_t>(bytes_written);
@@ -259,9 +292,15 @@ size_t raw::write(const void* buffer, size_t count) const {
 
 void raw::close() {
     if (fd_ >= 0) {
+#ifdef _WIN32
+        ::_close(fd_);
+#else
         ::close(fd_);
+#endif
     }
     fd_ = -1; 
+    size_ = 0;
+    block_size_ = 0;
 }
 
 bool raw::closed() const {
@@ -273,6 +312,10 @@ int64_t raw::tell() const {
 }
 
 int64_t raw::seek(int64_t offset, seek_mode mode) const {
+    if (closed()) {
+        throw std::runtime_error("Can't seek closed file.");
+    }
+
     int whence = 0;
     switch (mode) {
         case seek_mode::set:
@@ -285,17 +328,29 @@ int64_t raw::seek(int64_t offset, seek_mode mode) const {
             whence = SEEK_END;
             break;
     }
+#ifdef _WIN32
+    return ::_lseeki64(fd_, offset, whence);
+#else
     return ::lseek(fd_, offset, whence);
+#endif
 } 
 
 void raw::sync() const {
+    if (closed()) {
+        throw std::runtime_error("Can't sync closed file.");
+    }
+
+#ifdef _WIN32
+    bool ret = FlushFileBuffers((HANDLE)_get_osfhandle(fd_));
+    if (!ret) {
+        throw std::runtime_error("Couldn't sync file");
+    }
+#else
     int ret = ::fsync(fd_);
     if (ret < 0) {
-        switch(errno) {
-            default:
-            throw std::runtime_error("Couldn't sync file");
-        }
+        throw std::runtime_error("Couldn't sync file");
     }
+#endif
 }
 
 int64_t raw::size() const {
@@ -308,23 +363,26 @@ int64_t raw::block_size() const {
 
 void raw::run_stat() {
     if (fd_ < 0) {
-        switch (errno) {
-            default:
-            throw std::runtime_error("Couldn't open file");
-        }
+        throw std::runtime_error("Couldn't open file");
     }
 
+#ifdef _WIN32 
+    struct _stat st;
+    int ret = ::_fstat(fd_, &st);
+#else
     struct stat st;
     int ret = ::fstat(fd_, &st);
+#endif
     if (ret < 0) {
-        switch (errno) {
-            default:
-            throw std::runtime_error("Couldn't stat file");
-        }
+        throw std::runtime_error("Couldn't stat file");
     }
 
     size_ = st.st_size;
+#ifdef _WIN32
+    block_size_ = 4096;
+#else
     block_size_ = st.st_blksize;
+#endif
 }
 
 file::file(const std::string& path, mode mode) : file_(path, mode) {
@@ -378,13 +436,13 @@ bool file::can_write() const {
 
 size_t file::read(void* buffer, size_t count) {
     if (!can_read()) {
-        throw std::runtime_error("Can't read from write-only file");
+        throw std::runtime_error("Can't read from file");
     }
 
     size_t read = 0;
     while (true) {
         size_t available = buf_size_ - buf_i_;
-        size_t copy_size = std::min(count - read, available);
+        size_t copy_size = (std::min)(count - read, available);
 
         memcpy(buffer, buffer_ + buf_i_, copy_size);
         buf_i_ += copy_size;
@@ -404,6 +462,10 @@ size_t file::read(void* buffer, size_t count) {
 }
 
 std::string file::read(int64_t count) {
+    if (!can_read()) {
+        throw std::runtime_error("Can't read from file");
+    }
+
     if (count < 0) {
         size_t available = buf_size_ - buf_i_;
         count = size() - tell() + available;
@@ -418,7 +480,7 @@ std::string file::read(int64_t count) {
     size_t read = 0;
     while (true) {
         size_t available = buf_size_ - buf_i_;
-        size_t copy_size = std::min(static_cast<size_t>(count) - read, available);
+        size_t copy_size = (std::min)(static_cast<size_t>(count) - read, available);
         ret.append(buffer_ + buf_i_, copy_size);
     
         buf_i_ += copy_size;
@@ -438,6 +500,10 @@ std::string file::read(int64_t count) {
 }
 
 std::vector<uint8_t> file::read_bytes(int64_t count) {
+    if (!can_read()) {
+        throw std::runtime_error("Can't read from file");
+    }
+
     if (count < 0) {
         size_t available = buf_size_ - buf_i_;
         count = size() - tell() + available;
@@ -452,7 +518,7 @@ std::vector<uint8_t> file::read_bytes(int64_t count) {
     size_t read = 0;
     while (true) {
         size_t available = buf_size_ - buf_i_;
-        size_t copy_size = std::min(static_cast<size_t>(count) - read, available);
+        size_t copy_size = (std::min)(static_cast<size_t>(count) - read, available);
         ret.insert(ret.end(), buffer_ + buf_i_, buffer_ + buf_i_ + copy_size);
     
         buf_i_ += copy_size;
@@ -472,10 +538,14 @@ std::vector<uint8_t> file::read_bytes(int64_t count) {
 }
 
 size_t file::read_into_capacity(std::vector<uint8_t>& vec) {
+    if (!can_read()) {
+        throw std::runtime_error("Can't read from file");
+    }
+
     size_t read = 0;
     while (true) {
         size_t available = buf_size_ - buf_i_;
-        size_t copy_size = std::min(vec.capacity() - vec.size(), available);
+        size_t copy_size = (std::min)(vec.capacity() - vec.size(), available);
 
         vec.insert(vec.end(), buffer_ + buf_i_, buffer_ + buf_i_ + copy_size);
         buf_i_ += copy_size;
@@ -495,6 +565,10 @@ size_t file::read_into_capacity(std::vector<uint8_t>& vec) {
 }
 
 bool file::read_line(std::string& line) {
+    if (!can_read()) {
+        throw std::runtime_error("Can't read from file");
+    }
+
     size_t start = buf_i_;
     line.clear();
 
@@ -527,13 +601,13 @@ bool file::read_line(std::string& line) {
 
 size_t file::write(const void* buffer, size_t count) {
     if (!can_write()) {
-        throw std::runtime_error("Can't write to read-only file");
+        throw std::runtime_error("Can't write to file");
     }
 
     size_t written = 0;
     while (written != count) {
         size_t cap_remaining = buf_cap_ - buf_i_;
-        size_t copy_size = std::min(count - written, cap_remaining);
+        size_t copy_size = (std::min)(count - written, cap_remaining);
         memcpy(buffer_ + buf_i_, static_cast<const char*>(buffer) + written, copy_size);
         buf_i_ += copy_size;
         written += copy_size;
@@ -550,6 +624,10 @@ size_t file::write(std::string_view sv) {
 }
 
 void file::flush() {
+    if (!can_write()) {
+        throw std::runtime_error("Can't flush file");
+    }
+
     file_.write(buffer_, buf_i_);
     buf_i_ = 0; 
 }
