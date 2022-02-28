@@ -1,0 +1,22 @@
+name: C/C++ CI
+
+on:
+  push:
+    branches: [ $default-branch ]
+  pull_request:
+    branches: [ $default-branch ]
+
+jobs:
+  build:
+
+    runs-on: ubuntu-latest
+
+    steps:
+    - uses: actions/checkout@v2
+    - name: build dir
+      run: mkdir build
+    - name: configure 
+      run: cmake .. -G Ninja
+      working-directory: ./build
+    - name: build & run tests
+      run: ninja tests
