@@ -1,6 +1,6 @@
 # file::
 
-![Build](https://github.com/cusimr/file/actions/workflows/ci.yml/badge.svg)
+[![C/C++ CI](https://github.com/cusiman7/file/actions/workflows/ci.yml/badge.svg)](https://github.com/cusiman7/file/actions/workflows/ci.yml)
 
 file:: is a simple to use C++ library. For when you just want to read a file. Project goals include:
 
