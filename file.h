@@ -47,6 +47,9 @@ T open(const std::string& path, mode mode = mode::read) {
     return T(path, mode);
 }
 
+/*
+ * An unbuffered file. All reads and writes are sent directly to the OS via system calls.
+ */
 class raw {
 public:
     raw(const std::string& path, mode mode);
@@ -56,31 +59,49 @@ public:
     raw& operator=(raw&& other);
     ~raw();
 
+    // Returns true if the file is open and in read mode
     bool can_read() const;
+    // Returns true if the file is open and in write or append mode
     bool can_write() const;
+    // Returns the mode of the file
+    enum mode mode() const;
 
+    // Reads count bytes into buffer. Returns the number of bytes read
     size_t read(void* buffer, size_t count) const;
+    // Writes count bytes to the file from buffer
+    // Returns the number of bytes written
     size_t write(const void* buffer, size_t count) const;
 
+    // Closes the file.
     void close();
+    // Returns true if the file is closed
     bool closed() const;
 
+    // Seek to a specific byte offset in the file
     int64_t seek(int64_t offset, seek_mode mode) const;
+    // Return the current byte offset in the file 
     int64_t tell() const;
+    // If in write or append mode tell the OS to sync its caches to the underlying storage device 
     void sync() const;
 
+    // Returns the size of the opened file
     int64_t size() const;
+    // Returns the filesystem block size of the opened file
     int64_t block_size() const;
 
 private:
     void run_stat();
 
     int fd_;
-    mode mode_;
+    enum mode mode_;
     int64_t size_;
     int64_t block_size_;
 };
 
+/*
+ * A buffered file. All reads and writes are buffered and flushed automatically when the buffer 
+ * if full or the file is closed.
+ */
 class file {
 public:
     file(const std::string& path, mode mode);
@@ -90,8 +111,12 @@ public:
     file& operator=(file&& other);
     ~file();
     
+    // Returns true if the file is open and in read mode
     bool can_read() const;
+    // Returns true if the file is open and in write or append mode
     bool can_write() const;
+    // Returns the mode of the file
+    enum mode mode() const;
 
     // Reads count bytes into buffer. Returns the number of bytes read
     size_t read(void* buffer, size_t count);
@@ -118,16 +143,21 @@ public:
     // Flushes the internal buffer to the underlying file
     void flush();
 
-    // Flushes the internal buffer to the underlying file, if applicable and closes the file.
+    // Flushes the internal buffer to the underlying file, if applicable. and closes the file.
     void close();
     // Returns true if the file is closed
     bool closed() const;
 
+    // Seek to a specific byte offset in the file
     int64_t seek(int64_t offset, seek_mode mode);
+    // Return the current byte offset in the file 
     int64_t tell() const;
+    // If in write or append mode tell the OS to sync its caches to the underlying storage device 
     void sync() const;
 
+    // Returns the size of the opened file
     int64_t size() const;
+    // Returns the filesystem block size of the opened file
     int64_t block_size() const;
 
     struct lines_range {
@@ -188,7 +218,27 @@ private:
     bool eof_ = false;
 };
 
-raw::raw(const std::string& path, mode mode) : mode_(mode) {
+inline void strerror_r_thrower(int, const char* buf) {
+    throw std::runtime_error(buf);
+}
+
+inline void strerror_r_thrower(char* ret, const char*) {
+    throw std::runtime_error(ret);
+}
+
+inline void throw_errno_exception(int err) {
+    char errorstr[256] = "";
+#ifdef _WIN32
+    strerror_s(errorstr, 256, err);
+    throw std::runtime_error(errorstr);
+#else
+    // Depending on compiler strerror_r either returns an int or a char* error message, ignoring the buffer
+    auto ret = strerror_r(err, errorstr, 256);
+    strerror_r_thrower(ret, errorstr);
+#endif
+}
+
+raw::raw(const std::string& path, enum mode mode) : mode_(mode) {
     int flags = 0;
 #ifdef _WIN32
     int p_mode = 0;
@@ -208,7 +258,7 @@ raw::raw(const std::string& path, mode mode) : mode_(mode) {
     }
     
 #pragma warning(push)
-#pragma warning(disable: 4996)
+#pragma warning(disable: 4996) // Disable deprecation warnings for _open
     fd_ = ::_open(path.c_str(), flags, p_mode);
 #pragma warning(pop)
 #else
@@ -229,6 +279,9 @@ raw::raw(const std::string& path, mode mode) : mode_(mode) {
     
     fd_ = ::open(path.c_str(), flags, p_mode);
 #endif
+    if (fd_ < 0) {
+        throw_errno_exception(errno);
+    }
     run_stat();
 }
 
@@ -264,6 +317,10 @@ bool raw::can_write() const {
     return !closed() && (mode_ == mode::write || mode_ == mode::append);
 }
 
+mode raw::mode() const {
+    return mode_;
+}
+
 size_t raw::read(void* buffer, size_t count) const {
 #ifdef _WIN32
     int bytes_read = ::_read(fd_, buffer, static_cast<unsigned int>(count));
@@ -271,7 +328,7 @@ size_t raw::read(void* buffer, size_t count) const {
     ssize_t bytes_read = ::read(fd_, buffer, count);
 #endif
     if (bytes_read < 0) {
-        throw std::runtime_error("Couldn't read file");
+        throw_errno_exception(errno);
     }
 
     return static_cast<size_t>(bytes_read);
@@ -284,7 +341,7 @@ size_t raw::write(const void* buffer, size_t count) const {
     ssize_t bytes_written = ::write(fd_, buffer, count);
 #endif
     if (bytes_written < 0) {
-        throw std::runtime_error("Couldn't write file");
+        throw_errno_exception(errno);
     }
 
     return static_cast<size_t>(bytes_written);
@@ -329,15 +386,24 @@ int64_t raw::seek(int64_t offset, seek_mode mode) const {
             break;
     }
 #ifdef _WIN32
-    return ::_lseeki64(fd_, offset, whence);
+    int64_t ret = ::_lseeki64(fd_, offset, whence);
 #else
-    return ::lseek(fd_, offset, whence);
+    int64_t ret = ::lseek(fd_, offset, whence);
 #endif
+
+    if (ret == -1) {
+        throw_errno_exception(errno);
+    }
+    return ret;
 } 
 
 void raw::sync() const {
     if (closed()) {
         throw std::runtime_error("Can't sync closed file.");
+    }
+
+    if (!can_write()) {
+        throw std::runtime_error("File not opened for writing cannot be synced.");
     }
 
 #ifdef _WIN32
@@ -348,7 +414,7 @@ void raw::sync() const {
 #else
     int ret = ::fsync(fd_);
     if (ret < 0) {
-        throw std::runtime_error("Couldn't sync file");
+        throw_errno_exception(errno);
     }
 #endif
 }
@@ -363,7 +429,7 @@ int64_t raw::block_size() const {
 
 void raw::run_stat() {
     if (fd_ < 0) {
-        throw std::runtime_error("Couldn't open file");
+        throw std::runtime_error("Can't stat closed file.");
     }
 
 #ifdef _WIN32 
@@ -374,7 +440,7 @@ void raw::run_stat() {
     int ret = ::fstat(fd_, &st);
 #endif
     if (ret < 0) {
-        throw std::runtime_error("Couldn't stat file");
+        throw_errno_exception(errno);
     }
 
     size_ = st.st_size;
@@ -385,10 +451,13 @@ void raw::run_stat() {
 #endif
 }
 
-file::file(const std::string& path, mode mode) : file_(path, mode) {
+file::file(const std::string& path, enum mode mode) : file_(path, mode) {
     int64_t block_s = file_.block_size();
     buf_cap_ = (block_s > 0) ? block_s : 4096;
     buffer_ = static_cast<char*>(malloc(buf_cap_));
+    if (!buffer_) {
+        throw std::bad_alloc();
+    }
 }
 
 file::file(file&& other) : 
@@ -434,9 +503,16 @@ bool file::can_write() const {
     return file_.can_write();
 }
 
+mode file::mode() const {
+    return file_.mode();
+}
+
 size_t file::read(void* buffer, size_t count) {
-    if (!can_read()) {
-        throw std::runtime_error("Can't read from file");
+    if (closed()) {
+        throw std::runtime_error("Can't read from closed file");
+    }
+    if (mode() != mode::read) {
+        throw std::runtime_error("File not opened for reading");
     }
 
     size_t read = 0;
@@ -462,8 +538,11 @@ size_t file::read(void* buffer, size_t count) {
 }
 
 std::string file::read(int64_t count) {
-    if (!can_read()) {
-        throw std::runtime_error("Can't read from file");
+    if (closed()) {
+        throw std::runtime_error("Can't read from closed file");
+    }
+    if (mode() != mode::read) {
+        throw std::runtime_error("File not opened for reading");
     }
 
     if (count < 0) {
@@ -500,8 +579,11 @@ std::string file::read(int64_t count) {
 }
 
 std::vector<uint8_t> file::read_bytes(int64_t count) {
-    if (!can_read()) {
-        throw std::runtime_error("Can't read from file");
+    if (closed()) {
+        throw std::runtime_error("Can't read from closed file");
+    }
+    if (mode() != mode::read) {
+        throw std::runtime_error("File not opened for reading");
     }
 
     if (count < 0) {
@@ -538,8 +620,11 @@ std::vector<uint8_t> file::read_bytes(int64_t count) {
 }
 
 size_t file::read_into_capacity(std::vector<uint8_t>& vec) {
-    if (!can_read()) {
-        throw std::runtime_error("Can't read from file");
+    if (closed()) {
+        throw std::runtime_error("Can't read from closed file");
+    }
+    if (mode() != mode::read) {
+        throw std::runtime_error("File not opened for reading");
     }
 
     size_t read = 0;
@@ -565,8 +650,11 @@ size_t file::read_into_capacity(std::vector<uint8_t>& vec) {
 }
 
 bool file::read_line(std::string& line) {
-    if (!can_read()) {
-        throw std::runtime_error("Can't read from file");
+    if (closed()) {
+        throw std::runtime_error("Can't read from closed file");
+    }
+    if (mode() != mode::read) {
+        throw std::runtime_error("File not opened for reading");
     }
 
     size_t start = buf_i_;
@@ -600,8 +688,11 @@ bool file::read_line(std::string& line) {
 }
 
 size_t file::write(const void* buffer, size_t count) {
-    if (!can_write()) {
-        throw std::runtime_error("Can't write to file");
+    if (closed()) {
+        throw std::runtime_error("Can't write to closed file");
+    }
+    if (mode() != mode::write || mode() != mode::append) {
+        throw std::runtime_error("File not opened for writing");
     }
 
     size_t written = 0;
@@ -624,8 +715,11 @@ size_t file::write(std::string_view sv) {
 }
 
 void file::flush() {
-    if (!can_write()) {
-        throw std::runtime_error("Can't flush file");
+    if (closed()) {
+        throw std::runtime_error("Can't flush to closed file");
+    }
+    if (mode() != mode::write || mode() != mode::append) {
+        throw std::runtime_error("File not opened for writing");
     }
 
     file_.write(buffer_, buf_i_);
