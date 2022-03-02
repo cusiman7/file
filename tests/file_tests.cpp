@@ -133,7 +133,7 @@ TEST_CASE("Benchmark words", "[bench]") {
     };
     
     BENCHMARK("iostream wc") {
-        std::ifstream f("words"); 
+        std::ifstream f("words", std::ios::in | std::ios::binary);
         uint64_t count = 0;
         for (std::string line; std::getline(f, line);) {
             (void)line;
@@ -141,29 +141,32 @@ TEST_CASE("Benchmark words", "[bench]") {
         }
         return count;
     };
-    
+
     BENCHMARK("file read as string") {
         auto f = file::open("words");
         return f.read(); 
     };
 
     BENCHMARK("iostream read as string (stringstream)") {
-        std::ifstream t("words");
+        std::ifstream f("words", std::ios::in | std::ios::binary);
         std::stringstream buffer;
-        buffer << t.rdbuf(); 
+        buffer << f.rdbuf();
         return buffer.str();
     };
 
+    BENCHMARK("iostream read as string (istreambuf_iterator)") {
+        std::ifstream f("words", std::ios::in | std::ios::binary);
+        return std::string((std::istreambuf_iterator<char>(f)), std::istreambuf_iterator<char>());
+    };
+
     BENCHMARK("iostream read as string (low level)") {
-        std::ifstream t("words");
-        t.seekg(0, std::ios::end);
-        size_t size = t.tellg();
+        std::ifstream f("words", std::ios::in | std::ios::binary);
+        f.seekg(0, std::ios::end);
+        size_t size = f.tellg();
         std::string buffer(size, ' ');
-        t.seekg(0);
-        t.read(&buffer[0], size);
+        f.seekg(0);
+        f.read(&buffer[0], size);
         return buffer;
     };
 }
-
-
 
