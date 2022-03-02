@@ -13,39 +13,52 @@ static const char* test_txt = "this is a line\nthis is line 2\nend\n";
 
 TEST_CASE("Read a file", "[unit]") {
 
-    auto f = file::open("test.txt");
+    auto f_res = file::open("test.txt");
+    REQUIRE(f_res.is_ok());
+    auto f = std::move(f_res).value();
 
     SECTION("Can read into a raw buffer") {
         char buf[100];
-        size_t size = f.read(buf, 100);
-        REQUIRE(size == static_cast<size_t>(f.size()));
+        auto size = f.read(buf, 100);
+        REQUIRE(size.is_ok());
+        REQUIRE(size.value() == static_cast<size_t>(f.size()));
     } 
 
     SECTION("Can read whole file as a string") {
-        std::string s = f.read();
-        REQUIRE(s.size() == static_cast<size_t>(f.size()));    
-        REQUIRE(s == test_txt);
+        auto s = f.read();
+        REQUIRE(s.is_ok());
+        REQUIRE(s.value().size() == static_cast<size_t>(f.size()));    
+        REQUIRE(s.value() == test_txt);
     }
 
     SECTION("Can read a few bytes as a string") {
-        std::string s = f.read(5);
-        REQUIRE(s.size() == 5);
-        REQUIRE(s == "this ");
+        auto s = f.read(5);
+        REQUIRE(s.is_ok());
+        REQUIRE(s.value().size() == 5);
+        REQUIRE(s.value() == "this ");
 
         s = f.read(2);
-        REQUIRE(s.size() == 2);
-        REQUIRE(s == "is");
+        REQUIRE(s.value().size() == 2);
+        REQUIRE(s.value() == "is");
     }
 
     SECTION("Can read line by line") {
         std::string line;
-        REQUIRE(f.read_line(line));
+        auto res = f.read_line(line);
+        REQUIRE(res.is_ok());
+        REQUIRE(res.value());
         REQUIRE(line == "this is a line");
-        REQUIRE(f.read_line(line));
+        res = f.read_line(line);
+        REQUIRE(res.is_ok());
+        REQUIRE(res.value());
         REQUIRE(line == "this is line 2");
-        REQUIRE(f.read_line(line));
+        res = f.read_line(line);
+        REQUIRE(res.is_ok());
+        REQUIRE(res.value());
         REQUIRE(line == "end");
-        REQUIRE(!f.read_line(line));
+        res = f.read_line(line);
+        REQUIRE(res.is_ok());
+        REQUIRE(!res.value());
     }
 
     SECTION("Can read lines as iterator") {
@@ -58,48 +71,61 @@ TEST_CASE("Read a file", "[unit]") {
     }
 
     SECTION("Can read bytes as a vector") {
-        std::vector<uint8_t> v = f.read_bytes(5);
-        REQUIRE(v.size() == 5);
-        REQUIRE(v[0] == 't');
+        auto v = f.read_bytes(5);
+        REQUIRE(v.is_ok());
+        REQUIRE(v.value().size() == 5);
+        REQUIRE(v.value()[0] == 't');
 
         v = f.read_bytes(2);
-        REQUIRE(v.size() == 2);
-        REQUIRE(v[0] == 'i');
+        REQUIRE(v.is_ok());
+        REQUIRE(v.value().size() == 2);
+        REQUIRE(v.value()[0] == 'i');
     }
 
     SECTION("Can read bytes into an existing vector's capacity") {
         std::vector<uint8_t> v;
         v.reserve(5);
 
-        REQUIRE(f.read_into_capacity(v) == 5);
+        auto res = f.read_into_capacity(v);
+        REQUIRE(res.is_ok());
+        REQUIRE(res.value() == 5);
         REQUIRE(v[0] == 't');
         
-        REQUIRE(f.read_into_capacity(v) == 0);
+        res = f.read_into_capacity(v);
+        REQUIRE(res.is_ok());
+        REQUIRE(res.value() == 0);
         v.clear();
 
-        REQUIRE(v.capacity() == 5);
-        REQUIRE(f.read_into_capacity(v) == 5);
+        res = f.read_into_capacity(v);
+        REQUIRE(res.is_ok());
+        REQUIRE(res.value() == 5);
         REQUIRE(v[0] == 'i');
     }
 
     SECTION("Can't write to a file opened for reading") {
-        REQUIRE_THROWS(f.write("try this"));
+        REQUIRE(f.write("try this").is_error());
     }
     
     SECTION("Can't flush to a file opened for reading") {
-        REQUIRE_THROWS(f.flush());
+        REQUIRE(f.flush().is_error());
     }
 
     SECTION("Can close") {
         f.close();
         REQUIRE(f.closed());
-        REQUIRE_THROWS(f.read());
+        REQUIRE(f.read().is_error());
     }
 
     SECTION("Can seek") {
-        REQUIRE(f.seek(5, file::seek_mode::set) == 5);
-        REQUIRE(f.tell() == 5);
-        REQUIRE(f.read(2) == "is");
+        auto res = f.seek(5, file::seek_mode::set);
+        REQUIRE(res.is_ok());
+        REQUIRE(res.value() == 5);
+        res = f.tell();
+        REQUIRE(res.is_ok());
+        REQUIRE(res.value() == 5);
+        auto s = f.read(2);
+        REQUIRE(s.is_ok());
+        REQUIRE(s.value() == "is");
     }
 
     SECTION("Move construct") {
@@ -107,8 +133,8 @@ TEST_CASE("Read a file", "[unit]") {
 
         REQUIRE(f.closed());
         REQUIRE(!f2.closed());
-        REQUIRE_THROWS(f.read());
-        REQUIRE(!f2.read().empty());
+        REQUIRE(f.read().is_error());
+        REQUIRE(f2.read().is_ok());
     }
     
     SECTION("Move assign") {
@@ -116,18 +142,21 @@ TEST_CASE("Read a file", "[unit]") {
 
         REQUIRE(f.closed());
         REQUIRE(!f2.closed());
-        REQUIRE_THROWS(f.read());
-        REQUIRE(!f2.read().empty());
+        REQUIRE(f.read().is_error());
+        REQUIRE(f2.read().is_ok());
     }
 }
 
 TEST_CASE("Benchmark words", "[bench]") {
     BENCHMARK("file wc") {
-        auto f = file::open("words");
         uint64_t count = 0;
-        for (auto& line : f.lines()) {
-            (void)line;
-            count++;
+        if (auto f = file::open("words"); f.is_ok()) {
+            auto& file = f.value();
+            for (auto& line : file.lines()) {
+                (void)line;
+                count++;
+            }
+            return count;
         }
         return count;
     };
@@ -144,7 +173,7 @@ TEST_CASE("Benchmark words", "[bench]") {
     
     BENCHMARK("file read as string") {
         auto f = file::open("words");
-        return f.read(); 
+        return f.value().read().value();
     };
 
     BENCHMARK("iostream read as string (stringstream)") {
